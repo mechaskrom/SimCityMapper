@@ -6,6 +6,12 @@ using System.Text;
 namespace SimCityMapper
 {
     //Data about tile types (the small tiles that form a city).
+
+    //Some tiles have an extra top tile up left of it in BG1 layer.
+    //The tile and the extra top tile is in the same location. BG1 is just scrolled
+    //with an 8,8 offset compared to BG2. Pretty clever!
+    //Tile index 768 (all transparent) is used if there is no extra top tile.
+
     class TileType
     {
         public static void get(int tileType, out int tileInd, out int tileTopInd, out int palRow)

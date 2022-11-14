@@ -32,6 +32,8 @@ namespace SimCityMapper
 
         private const int TileCharLength = (TileWidth * TileHeight * 4) / 8; //32 bytes per 4-bit tile.
 
+        public const int TileTopIndexNone = 768; //Indicates that a tile type has no top tile.
+
         private const int RamTileTypeDataStart = 0x10200; //City tile type data.
         private const int RamPaletteStart = 0x02440; //City palettes.
         private const int RamYearStart = 0x00B53; //Year (2 bytes).
@@ -39,6 +41,11 @@ namespace SimCityMapper
         private const int RamPopulationStart = 0x00BA5; //Population (4 bytes).
         private const int RamCityNameStart = 0x00B5B; //City name (10 bytes, same format as in save RAM).
         private const int RamMapNumberStart = 0x00B27; //3 bytes, one for each digit.
+
+        private const int RomTileDataStart = 0x156A9; //Tile data table.
+        private const int RomTileTopDataStart = 0x14F2D; //Tile top data table. Always -0x77C before tile data table?
+        //Verified in USA version. Unverified tile data address in other versions:
+        //RomTileDataStart: Japan=0x1586D, Europe=0x156B4, France=0x15712, Germany=0x1573C.
 
         private const int RomAnimatedTilesStart = 0x2B000; //Animated tile banks.
         private const int RomPalettesStart = 0x28000; //Palettes. The transitions between seasons are missing? Calculated?
@@ -361,124 +368,56 @@ namespace SimCityMapper
             return new SnesColorRow(mPaletteDataHud, 0);
         }
 
-        public static void extractTileTypeDataWrite()
+        public static void extractTileTypeData()
         {
-            //This method is for creating the two state files that we will later on extract tile type data from VRAM in.
+            //Extract tile type data from ROM. There are two tables, one for the normal (bottom)
+            //tiles and one for the extra top tiles. Each table seems to have 958 entries?
+            //Format of table-entries seems to be the same as the SNES tile map format?
+            //SNES tile map entry: vhfppptt tttttttt
+            //v,h = V/H flipping. Not used (always 0) in the tables?
+            //f = Priority flag. Sometimes used?
+            //p,t = palette and tile index.
 
-            //The "paused.state" is just a saved state of a paused city (speed in game menu set to paused).
-            //Used as a template to create custom modified states from (mainly only a city's tile type data in RAM is changed).
-
-            //My process to extract what tiles (in VRAM) and palette tile types uses. Maybe not the best way, but it works.
-            //Must use an old Snes9x (Snes9x 1.51 worked for me) to open state files in the vSNES editor.
-            //1. Use this method on a paused state file to create the two state files.
-            //2. Open the two state files in Snes9x so the game can update the tilemap in VRAM.
-            //   Each time move the screen so the tileblock is centered-ish and then save state file.
-            //3. Use the extract tile data read method on the two state files.
-
-            StateFileSnes9x state = StateFileSnes9x.open(Program.StatesFolder + "paused.state");
-            byte[] ram = state.Ram;
-
-            //Clear all of city.
-            //No need to clear all tiles again between writing tile blocks because all of the old block will be overwritten.
-            for (int tileY = 0; tileY < CityHeightInTiles; tileY++)
-            {
-                for (int tileX = 0; tileX < CityWidthInTiles; tileX++)
-                {
-                    int ramInd = getTileTypeDataRamInd(tileX, tileY);
-                    ram.write16bit(ramInd, 0);
-                }
-            }
-
-            //Write a block of tiles. Because all 1024 tiles will not practically fit in a 32*32 bg layer (the size SimCity uses)
-            //let's split all tiles into two blocks of 512 tiles. Two state files will therefore be written.
-            for (int block = 1, i = 0; block <= 2; block++) //27 rows with 19 tiles in 2 blocks = 1026 tiles. Wrap around two last tiles.
-            {
-                for (int row = 0; row < 27; row++)
-                {
-                    int ramInd = getTileTypeDataRamInd(1, row + 1); //Offset block of tiles by 1,1 (x,y).
-                    //Write row start marker.
-                    int startMarker = row == 0 ? 39 : 38; //Park with tree if new block else park.
-                    ram.write16bit(ramInd + 0, startMarker);
-                    ram.write16bit(ramInd + 2, startMarker);
-                    ram.write16bit(ramInd + 4, 0); //Empty.
-                    ramInd += 6; //Start row after the 3 tiles marker.
-                    for (int col = 0; col < 19; col++, i++, ramInd += 2) //Write the row of 19 tiles.
-                    {
-                        ram.write16bit(ramInd, i & 0x03FF); //Mask tile to 0-1023.
-                    }
-                }
-                state.save(Program.TempFolder + "extract tileblock" + block + ".state");
-            }
-        }
-
-        public static void extractTileTypeDataRead()
-        {
-            //This method is for extracting tile type data from VRAM in the two state files created earlier.
-
-            //Some known values used to create a start marker for tile block in VRAM.
-            //tile data 000: pal=1, tile=677 (0x2A5, empty ground)
-            //tile data 038: pal=1, tile=672 (0x2A0, park no tree)
-            //tile data 039: pal=1, tile=673 (0x2A1, park with tree)
-
-            //Read the two VRAM dumps. The two state files must have been loaded and resaved in Snes9x beforehand.
-            byte[][] vramDumps = new byte[2][];
-            vramDumps[0] = StateFileSnes9x.open(Program.TempFolder + "extract tileblock1.state").Vram;
-            vramDumps[1] = StateFileSnes9x.open(Program.TempFolder + "extract tileblock2.state").Vram;
+            byte[] rom = File.ReadAllBytes(Program.RomPath);
 
             StringBuilder sb = new StringBuilder();
             StringBuilder sbPal = new StringBuilder();
             StringBuilder sbTile = new StringBuilder();
             StringBuilder sbTileTop = new StringBuilder();
-            int tileType = 0; //Tile type (0-1023).
-            for (int block = 1; block <= 2; block++) //27 rows with 19 tiles in 2 blocks = 1026 tiles. Ignore two last tiles.
+            for (int tileType = 0; tileType < 1024; tileType++) //Tile type (0-1023).
             {
-                byte[] vram = vramDumps[block - 1];
-                int blockInd = 0xB800; //Start at BG2 layer's tilemap.
+                //Read table entry in ROM.
+                int entry = rom.read16bit(SimCity.RomTileDataStart + (tileType * 2));
+                int entryTop = rom.read16bit(SimCity.RomTileTopDataStart + (tileType * 2));
 
-                //Search for tile block start (two tiles of park with tree plus one empty tile).
-                for (; !(vram[blockInd + 0] == 0xA1 && vram[blockInd + 2] == 0xA1 && vram[blockInd + 4] == 0xA5); blockInd++)
-                {
-                    if (blockInd >= 0xC000) //Past BG2 layer's tilemap?
-                    {
-                        throw new ArgumentException("Tile block not found in VRAM dumps!");
-                    }
-                }
-                blockInd += 3 * 2; //Skip the three block start marker tiles.
+                //Read tile index.
+                int tileInd = entry & 0x03FF;
+                int tileIndTop = entryTop & 0x03FF;
 
-                for (int row = 0; row < 27; row++)
-                {
-                    int vramInd = blockInd + (row * 32 * 2); //32*2=64 bytes per row in BG2 layer's tilemap.
-                    for (int col = 0; col < 19 && tileType < 1024; col++, tileType++, vramInd += 2) //Read the row of 19 tiles. Tiles 0-1023.
-                    {
-                        int ntEntry = vram.read16bit(vramInd);
-                        int palRow = (ntEntry >> 10) & 0x7;
-                        int tileInd = ntEntry & 0x03FF;
+                //Read palette number.
+                int palRow = (entry >> 10) & 0x07;
+                int palRowTop = (entryTop >> 10) & 0x07;
 
-                        //Some tiles have an extra top tile up left of it in BG1 layer.
-                        //The tile and the extra top tile is in the same location. BG1 is just scrolled
-                        //with a 8,8 offset compared to BG2. Pretty clever!
-                        int ntEntryTop = vram.read16bit(vramInd - 0x800); //Check top tile in BG1.
-                        int palRowTop = (ntEntryTop >> 10) & 0x7;
-                        int tileIndTop = ntEntryTop & 0x03FF; //Tile index 768 (all transparent) is used if no extra top tile.
+                //V/H flipping never used?
+                System.Diagnostics.Debug.Assert((entry & 0xC000) == 0 && (entryTop & 0xC000) == 0,
+                    "V/H flipping bits not 0!");
 
-                        //All "normal" top tiles have the same palette as its parent tile? Check that assumption is true.
-                        System.Diagnostics.Debug.Assert(!(tileIndTop != 768 && tileType <= 957 && palRow != palRowTop),
-                            "Extra top tile has same palette assumption was incorrect!");
+                //All "normal" top tiles have the same palette as its bottom tile?
+                System.Diagnostics.Debug.Assert(palRowTop == palRow || tileIndTop == TileTopIndexNone || tileType > 957,
+                    "Extra top tile palette not same as bottom!");
 
-                        sb.AppendFormat("case {0}: tileInd={1}; tileTopInd={2}; palRow={3}; break; //{4}",
-                            tileType, tileInd, tileIndTop, palRow, TileType.getTileDescription(tileType));
-                        sb.AppendLine();
+                sb.AppendFormat("case {0}: tileInd={1}; tileTopInd={2}; palRow={3}; miniCol={4}; break; //{5}",
+                    tileType, tileInd, tileIndTop, palRow, TileType.getMinimapColor(tileType), TileType.getTileDescription(tileType));
+                sb.AppendLine();
 
-                        sbPal.AppendFormat("case {0}: return {1};", tileType, palRow);
-                        sbPal.AppendLine();
+                sbPal.AppendFormat("case {0}: return {1};", tileType, palRow);
+                sbPal.AppendLine();
 
-                        sbTile.AppendFormat("case {0}: return {1};", tileType, tileInd);
-                        sbTile.AppendLine();
+                sbTile.AppendFormat("case {0}: return {1};", tileType, tileInd);
+                sbTile.AppendLine();
 
-                        sbTileTop.AppendFormat("case {0}: return {1};", tileType, tileIndTop);
-                        sbTileTop.AppendLine();
-                    }
-                }
+                sbTileTop.AppendFormat("case {0}: return {1};", tileType, tileIndTop);
+                sbTileTop.AppendLine();
             }
             File.WriteAllText(Program.TempFolder + "extract tile data out switch.txt", sb.ToString());
             File.WriteAllText(Program.TempFolder + "extract tile data pal switch.txt", sbPal.ToString());

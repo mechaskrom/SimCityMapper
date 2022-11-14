@@ -35,8 +35,7 @@ namespace SimCityMapper
             //****************************************************************************************************************
             //Use these methods to extract data from the game.
 
-            //SimCity.extractTileTypeDataWrite();
-            //SimCity.extractTileTypeDataRead();
+            //SimCity.extractTileTypeData();
 
             //SimCity.extractTileTypeDataMinimapWrite();
             //SimCity.extractTileTypeDataMinimapRead();

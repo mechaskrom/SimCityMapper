@@ -398,7 +398,7 @@ namespace SimCityMapper
 
                     drawBgTile(tileInd, bgTileSheet, dstPos, palRow, tileFrames);
 
-                    if (tileTopInd != 768) //Tile type has a top tile?
+                    if (tileTopInd != SimCity.TileTopIndexNone) //Tile type has a top tile?
                     {
                         drawBgTile(tileTopInd, bgTileSheet, dstPos.getOffset(-TileWidth, -TileHeight), palRow, tileFrames);
                     }
